@@ -260,13 +260,6 @@ class RegGameWindow(QMainWindow):
         self.register_retry_spin.setValue(2)
         config_layout.addWidget(self.register_retry_spin, 1, 1)
 
-        config_layout.addWidget(QLabel("💵 Số tiền mặc định:"), 1, 2)
-        self.default_amount_spin = QSpinBox()
-        self.default_amount_spin.setRange(1000, 100000000)
-        self.default_amount_spin.setSingleStep(1000)
-        self.default_amount_spin.setValue(300000)
-        config_layout.addWidget(self.default_amount_spin, 1, 3)
-
         # Hàng 2
         self.register_use_proxy_check = QCheckBox("🌐 Sử dụng proxy khi đăng ký")
         self.register_use_proxy_check.setChecked(True)
@@ -276,19 +269,19 @@ class RegGameWindow(QMainWindow):
         self.register_save_file_check.setChecked(True)
         config_layout.addWidget(self.register_save_file_check, 2, 2, 1, 2)
 
-        # ========== Cấu hình Bank ==========
-        bank_box = QGroupBox("🏦 Cấu Hình Lấy Bank")
+        # ========== Cấu hình lấy mã QR / thông tin nạp ==========
+        bank_box = QGroupBox("🏦 Cấu Hình Lấy Mã QR")
         bank_layout = QGridLayout(bank_box)
         layout.addWidget(bank_box)
 
         # Hàng 0
-        bank_layout.addWidget(QLabel("🔧 Số luồng lấy bank:"), 0, 0)
+        bank_layout.addWidget(QLabel("🔧 Số luồng lấy mã QR:"), 0, 0)
         self.bank_threads_spin = QSpinBox()
         self.bank_threads_spin.setRange(1, 10)
         self.bank_threads_spin.setValue(3)
         bank_layout.addWidget(self.bank_threads_spin, 0, 1)
 
-        bank_layout.addWidget(QLabel("💵 Số tiền nap:"), 0, 2)
+        bank_layout.addWidget(QLabel("💵 Số tiền nạp:"), 0, 2)
         self.bank_amount_spin = QSpinBox()
         self.bank_amount_spin.setRange(1000, 100000000)
         self.bank_amount_spin.setSingleStep(1000)
@@ -302,14 +295,20 @@ class RegGameWindow(QMainWindow):
         self.bank_retry_spin.setValue(3)
         bank_layout.addWidget(self.bank_retry_spin, 1, 1)
 
-        self.bank_use_proxy_check = QCheckBox("🌐 Sử dụng proxy khi lấy bank")
+        self.bank_use_proxy_check = QCheckBox("🌐 Sử dụng proxy khi lấy mã QR")
         self.bank_use_proxy_check.setChecked(True)
         bank_layout.addWidget(self.bank_use_proxy_check, 1, 2, 1, 2)
 
         # Hàng 2
-        self.bank_send_telegram_check = QCheckBox("📨 Gửi Telegram khi có bank mới")
+        self.bank_send_telegram_check = QCheckBox("📨 Gửi Telegram khi có mã QR mới")
         self.bank_send_telegram_check.setChecked(True)
         bank_layout.addWidget(self.bank_send_telegram_check, 2, 0, 1, 3)
+
+        # Hàng 3
+        self.loop_after_bot_check = QCheckBox("🔄 Tự động chạy đăng ký lại sau khi lấy mã QR xong")
+        self.loop_after_bot_check.setChecked(False)
+        self.loop_after_bot_check.setToolTip("Sau khi bot lấy mã QR hoàn thành, sẽ tự động bắt đầu đăng ký thêm tài khoản")
+        bank_layout.addWidget(self.loop_after_bot_check, 3, 0, 1, 3)
 
         # ========== Cấu hình bảo mật ==========
         secret_box = QGroupBox("🔐 Cấu Hình Bảo Mật")
@@ -345,8 +344,8 @@ class RegGameWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         info_layout.addWidget(self.progress_bar, 1, 0, 1, 4)
 
-        # Pending bank count
-        self.pending_bank_label = QLabel("🏦 Tài khoản chưa có bank: 0")
+        # Số tài khoản chưa lấy được mã QR
+        self.pending_bank_label = QLabel("🏦 Tài khoản chưa lấy mã QR: 0")
         info_layout.addWidget(self.pending_bank_label, 2, 0, 1, 2)
 
         # ========== Button controls ==========
@@ -379,7 +378,7 @@ class RegGameWindow(QMainWindow):
         """)
         button_panel.addWidget(self.register_start_button)
 
-        self.run_bot_button = QPushButton("🤖 Chạy Bot lấy bank")
+        self.run_bot_button = QPushButton("🤖 Chạy Bot lấy mã QR")
         self.run_bot_button.clicked.connect(self.start_run_bot)
         self.run_bot_button.setStyleSheet("""
             QPushButton {
@@ -452,7 +451,7 @@ class RegGameWindow(QMainWindow):
         self.clear_accounts_button.clicked.connect(self.clear_all_accounts)
         button_row.addWidget(self.clear_accounts_button)
         
-        self.export_bank_button = QPushButton("📤 Xuất bank")
+        self.export_bank_button = QPushButton("📤 Xuất mã QR")
         self.export_bank_button.clicked.connect(self.export_bank_info)
         button_row.addWidget(self.export_bank_button)
         
@@ -460,7 +459,7 @@ class RegGameWindow(QMainWindow):
 
         self.accounts_table = QTableWidget(0, 8)
         self.accounts_table.setHorizontalHeaderLabels(
-            ["STT", "Username", "Password", "Phone", "Bank Account", "Bank Name", "Owner", "Proxy"]
+            ["STT", "Username", "Password", "Phone", "STK nhận", "Ngân hàng", "Chủ tài khoản", "Proxy"]
         )
         self.accounts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.accounts_table.verticalHeader().setVisible(False)
@@ -479,7 +478,7 @@ class RegGameWindow(QMainWindow):
         self.total_accounts_label = QLabel("Tổng số tài khoản: 0")
         stats_layout.addWidget(self.total_accounts_label, 0, 0)
         
-        self.total_bank_label = QLabel("Số tài khoản có bank: 0")
+        self.total_bank_label = QLabel("Số tài khoản đã lấy mã QR: 0")
         stats_layout.addWidget(self.total_bank_label, 0, 1)
         
         self.success_rate_label = QLabel("Tỷ lệ thành công: 0%")
@@ -667,7 +666,7 @@ class RegGameWindow(QMainWindow):
             with_bank = sum(1 for acc in self.accounts_list if acc.get("bank_account_no"))
         
         self.total_accounts_label.setText(f"Tổng số tài khoản: {total}")
-        self.total_bank_label.setText(f"Số tài khoản có bank: {with_bank}")
+        self.total_bank_label.setText(f"Số tài khoản đã lấy mã QR: {with_bank}")
         
         if total > 0:
             rate = (with_bank / total) * 100
@@ -761,7 +760,7 @@ class RegGameWindow(QMainWindow):
                 data = json.load(file)
             return data if isinstance(data, dict) else {}
         except Exception as error:
-            self.log(f"Lỗi tải dữ liệu bank: {error}", "ERROR")
+            self.log(f"L?i t?i d? li?u m? QR: {error}", "ERROR")
             return {}
 
     def save_bank_data(self, bank_data):
@@ -770,7 +769,7 @@ class RegGameWindow(QMainWindow):
             with open(self.bank_data_file, "w", encoding="utf-8") as file:
                 json.dump(bank_data, file, ensure_ascii=False, indent=2)
         except Exception as error:
-            self.log(f"Lỗi lưu dữ liệu bank: {error}", "ERROR")
+            self.log(f"Lỗi lưu dữ liệu mã QR: {error}", "ERROR")
 
     def save_bank_info_for_account(self, account):
         bank_data = self.load_bank_data()
@@ -799,22 +798,22 @@ class RegGameWindow(QMainWindow):
             self.log(f"❌ Lỗi lưu file: {error}", "ERROR")
 
     def export_bank_info(self):
-        """Xuất thông tin bank ra file"""
-        filename, _ = QFileDialog.getSaveFileName(self, "Lưu thông tin bank", "bank_info.txt", "Text Files (*.txt)")
+        """Xuất thông tin mã QR ra file"""
+        filename, _ = QFileDialog.getSaveFileName(self, "Lưu thông tin mã QR", "qr_info.txt", "Text Files (*.txt)")
         if filename:
             try:
                 with self.accounts_lock:
                     with_bank = [acc for acc in self.accounts_list if acc.get("bank_account_no")]
                 
                 with open(filename, "w", encoding="utf-8") as file:
-                    file.write("Username|Phone|Bank Account|Bank Name|Owner\n")
+                    file.write("Username|Phone|SoTaiKhoan|NganHang|ChuTaiKhoan\n")
                     for acc in with_bank:
                         line = f"{acc.get('username')}|{acc.get('phone')}|{acc.get('bank_account_no')}|{acc.get('bank_name')}|{acc.get('bank_account_name')}\n"
                         file.write(line)
                 
-                self.log(f"✅ Đã xuất {len(with_bank)} thông tin bank ra {filename}", "SUCCESS")
+                self.log(f"✅ Đã xuất {len(with_bank)} thông tin mã QR ra {filename}", "SUCCESS")
             except Exception as error:
-                self.log(f"❌ Lỗi xuất bank: {error}", "ERROR")
+                self.log(f"❌ Lỗi xuất mã QR: {error}", "ERROR")
 
     def clear_all_accounts(self):
         reply = QMessageBox.question(self, "Xác nhận", "Bạn có chắc muốn xóa tất cả tài khoản?")
@@ -850,7 +849,7 @@ class RegGameWindow(QMainWindow):
     def update_pending_bank_count(self):
         with self.accounts_lock:
             pending_count = sum(1 for account in self.accounts_list if not account.get("bank_account_no"))
-        self.pending_bank_label.setText(f"🏦 Tài khoản chưa có bank: {pending_count}")
+        self.pending_bank_label.setText(f"🏦 Tài khoản chưa lấy mã QR: {pending_count}")
 
     def reload_proxies(self):
         self.proxy_manager = ProxyManager()
@@ -932,7 +931,6 @@ class RegGameWindow(QMainWindow):
                 
                 start_time = time.time()
                 account, error = creator.register_only(
-                    amount=self.default_amount_spin.value(),
                     callback=log_callback,
                     max_retries=max_retries
                 )
@@ -1028,7 +1026,7 @@ class RegGameWindow(QMainWindow):
             return [account for account in self.accounts_list if not account.get("bank_account_no")]
 
     def process_run_bot(self):
-        self.log("🤖 BẮT ĐẦU CHẠY BOT LẤY BANK", "SUCCESS")
+        self.log("🤖 BẮT ĐẦU CHẠY BOT LẤY MÃ QR", "SUCCESS")
         self.log("📋 Đang tải danh sách tài khoản từ accounts.txt...", "INFO")
         self.load_accounts_from_file()
 
@@ -1040,10 +1038,10 @@ class RegGameWindow(QMainWindow):
 
         pending_accounts = self.get_pending_accounts_snapshot()
         if not pending_accounts:
-            self.queue_ui("finish_run", {"message": "⚠️ Không có tài khoản nào cần lấy bank", "level": "WARNING"})
+            self.queue_ui("finish_run", {"message": "⚠️ Không có tài khoản nào cần lấy mã QR", "level": "WARNING"})
             return
 
-        self.log(f"📊 Tìm thấy {len(pending_accounts)} tài khoản chưa có bank", "INFO")
+        self.log(f"📊 Tìm thấy {len(pending_accounts)} tài khoản chưa lấy mã QR", "INFO")
         self.log(f"🔧 Cấu hình: {max_threads} luồng, mỗi tài khoản thử tối đa {retry_limit} lần", "INFO")
         self.log(f"🔄 Mỗi lần thử sẽ dùng proxy MỚI, không dùng lại proxy cũ", "INFO")
         
@@ -1097,7 +1095,7 @@ class RegGameWindow(QMainWindow):
                     # Tạo fetcher với proxy mới
                     fetcher = BankFetcher(proxy=proxy)
                     
-                    # Thử lấy bank
+                    # Thử lấy mã QR
                     fetch_success, result = fetcher.fetch_bank_for_account(
                         account,
                         amount,
@@ -1105,7 +1103,7 @@ class RegGameWindow(QMainWindow):
                     )
                     
                     if fetch_success:
-                        # Lấy bank thành công
+                        # Lấy mã QR thành công
                         result_items = result.get("results") or [result]
                         final_result = result_items[-1]
                         
@@ -1159,7 +1157,7 @@ class RegGameWindow(QMainWindow):
                 if not success:
                     with counters_lock:
                         failed_count += 1
-                    self.log(f"⚠️ {username}: BỎ QUA - Không lấy được bank sau {retry_limit} lần thử với proxy khác nhau", "WARNING", thread_id)
+                    self.log(f"⚠️ {username}: BỎ QUA - Không lấy được mã QR sau {retry_limit} lần thử với proxy khác nhau", "WARNING", thread_id)
                     self.log(f"   Lỗi cuối: {last_error}", "INFO", thread_id)
             
             self.log(f"🏁 Thread {thread_id} hoàn thành", "INFO", thread_id)
@@ -1189,25 +1187,37 @@ class RegGameWindow(QMainWindow):
             {
                 "message": (
                     f"\n{'='*50}\n"
-                    f"📊 KẾT THÚC LẤY BANK\n"
+                    f"KET THUC LAY MA QR\n"
                     f"{'='*50}\n"
-                    f"✅ Thành công: {success_count}/{len(pending_accounts)}\n"
-                    f"❌ Thất bại: {failed_count}\n"
-                    f"📈 Tỷ lệ thành công: {success_rate:.1f}%\n"
-                    f"🔄 Mỗi tài khoản thử tối đa {retry_limit} lần với proxy khác nhau\n"
+                    f"Thanh cong: {success_count}/{len(pending_accounts)}\n"
+                    f"That bai: {failed_count}\n"
+                    f"Ty le thanh cong: {success_rate:.1f}%\n"
+                    f"Moi tai khoan thu toi da {retry_limit} lan voi proxy khac nhau\n"
                     f"{'='*50}"
                 ),
                 "level": level,
             },
         )
+
+        # Kiểm tra nếu cần lặp lại đăng ký
+        if self.loop_after_bot_check.isChecked():
+            self.log("🔄 Tự động bắt đầu đăng ký lại sau 3 giây...", "INFO")
+            # Chờ 3 giây trước khi bắt đầu lại
+            if not self.interruptible_sleep(3):
+                # Chạy trong thread riêng để không block
+                def restart_register():
+                    self.start_register()
+                restart_thread = threading.Thread(target=restart_register, daemon=True)
+                restart_thread.start()
+
     def stop_process(self):
         if not self.is_running:
             return
         self.stop_flag = True
         self.stop_event.set()
-        self.log("Stop requested, waiting for workers to exit...", "WARNING")
+        self.log("Đã yêu cầu dừng, đang chờ các luồng thoát...", "WARNING")
         self.join_active_threads(include_process_thread=True, timeout=1.5)
-        self.finish_process("All active threads were asked to stop", "WARNING")
+        self.finish_process("Đã gửi tín hiệu dừng tới toàn bộ luồng đang chạy", "WARNING")
 
     def closeEvent(self, event):
         if self.is_running:
