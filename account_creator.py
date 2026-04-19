@@ -183,7 +183,6 @@ class AccountCreator:
             
             if response.status_code == 200:
                 data = response.json()
-                # Đăng ký thành công khi status OK hoặc code 200
                 if data.get("status") == "OK" or data.get("code") == 200:
                     if callback:
                         callback(f"✅ Đăng ký thành công: {username}")
@@ -196,51 +195,58 @@ class AccountCreator:
                 
         except Exception as e:
             return False, str(e)
-    def set_proxy_from_string(self, proxy_string):
-        """Set proxy từ string format 'ip:port' hoặc 'ip:port:user:pass'"""
-        self.proxy = proxy_string
-        
-        # Test proxy ngay
-        if self.proxy:
-            if not self.test_proxy():
-                print(f"[-] Proxy {proxy_string} không hoạt động")
-                return False
-        return True
-    def register_only(self, amount=300000, callback=None):
+
+    def register_only(self, amount=300000, callback=None, max_retries=2):
         """CHỈ ĐĂNG KÝ TÀI KHOẢN, không lấy bank"""
         
-        # Kiểm tra proxy
-        if self.proxy:
-            if not self.test_proxy():
-                return None, f"Proxy {self.proxy} không hoạt động"
+        for attempt in range(max_retries):
+            # Kiểm tra proxy
+            if self.proxy:
+                if not self.test_proxy():
+                    if callback:
+                        callback(f"⚠️ Proxy {self.proxy} không hoạt động, thử lại lần {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return None, f"Proxy {self.proxy} không hoạt động"
+            
+            # Tạo thông tin ngẫu nhiên
+            username = self.random_username()
+            phone = self.random_phone()
+            password = self.random_password()
+            
+            if callback:
+                callback(f"📝 {username}|{phone}|{password}")
+            
+            # Giải captcha
+            captcha_token = self.solve_captcha(callback)
+            if not captcha_token:
+                if callback:
+                    callback(f"❌ Không thể giải captcha lần {attempt + 1}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                return None, "Không thể giải captcha"
+            
+            # Tạo session và đăng ký
+            session = self.create_session()
+            success, result = self.register(username, phone, password, captcha_token, session, callback)
+            
+            if success:
+                account_info = {
+                    "username": username,
+                    "phone": phone,
+                    "password": password,
+                    "proxy": self.proxy,
+                    "status": "registered",
+                    "created_at": time.time()
+                }
+                return account_info, None
+            else:
+                if callback:
+                    callback(f"❌ Đăng ký thất bại lần {attempt + 1}: {result}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
         
-        # Tạo thông tin ngẫu nhiên
-        username = self.random_username()
-        phone = self.random_phone()
-        password = self.random_password()
-        
-        if callback:
-            callback(f"Thông tin: {username}|{phone}|{password}")
-        
-        # Giải captcha
-        captcha_token = self.solve_captcha(callback)
-        if not captcha_token:
-            return None, "Không thể giải captcha"
-        
-        # Tạo session và đăng ký
-        session = self.create_session()
-        success, result = self.register(username, phone, password, captcha_token, session, callback)
-        
-        if not success:
-            return None, result
-        
-        # Trả về thông tin tài khoản
-        account_info = {
-            "username": username,
-            "phone": phone,
-            "password": password,
-            "proxy": self.proxy,
-            "status": "registered"
-        }
-        
-        return account_info, None
+        return None, "Hết số lần thử"

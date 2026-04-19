@@ -6,7 +6,7 @@ from config import DEPOSIT_API, LOGIN_API, TARGET_URL
 
 
 PAYEDCO_API = "https://fabet.menu/api/v2/payment/3rd/payedco"
-REQUEST_DELAY_SECONDS = 5
+REQUEST_DELAY_SECONDS = 3  # Giảm delay để tăng tốc
 REQUEST_SEQUENCE = [
     {
         "name": "fpay-100k",
@@ -97,9 +97,11 @@ class BankFetcher:
 
         try:
             if callback:
-                callback(f"Dang dang nhap: {username}")
+                callback(f"Đang đăng nhập: {username}")
 
             response = session.post(LOGIN_API, json=login_payload, timeout=30)
+            
+            # Kiểm tra status code
             if response.status_code != 200:
                 return False, f"HTTP {response.status_code}"
 
@@ -107,9 +109,9 @@ class BankFetcher:
             if data.get("status") == "OK" and data.get("success") and data.get("code") == 200:
                 if "user" in session.cookies:
                     if callback:
-                        callback(f"Dang nhap thanh cong: {username}")
+                        callback(f"Đăng nhập thành công: {username}")
                     return True, session
-                return False, "Khong nhan duoc cookie xac thuc"
+                return False, "Không nhận được cookie xác thực"
 
             error_msg = data.get("message") or data.get("msg") or "Login failed"
             return False, error_msg
@@ -154,10 +156,13 @@ class BankFetcher:
                 )
 
             response = session.post(request_config["url"], json=request_config["payload"], timeout=30)
+            
+            # Kiểm tra status code - nếu không phải 200 thì báo lỗi
             if response.status_code != 200:
                 return {
                     "success": False,
                     "error": f"Request {request_index}/{total_requests} HTTP {response.status_code}",
+                    "status_code": response.status_code
                 }
 
             data = response.json()
@@ -165,13 +170,15 @@ class BankFetcher:
                 return {
                     "success": False,
                     "error": data.get("message") or data.get("msg") or f"Request {request_index}/{total_requests} failed",
+                    "status_code": response.status_code
                 }
 
             result = self.extract_bank_info(data)
             if not result:
                 return {
                     "success": False,
-                    "error": f"Request {request_index}/{total_requests} khong co du lieu bank",
+                    "error": f"Request {request_index}/{total_requests} không có dữ liệu bank",
+                    "status_code": response.status_code
                 }
 
             result["request_name"] = request_config["name"]
@@ -179,39 +186,141 @@ class BankFetcher:
             result["request_payload"] = dict(request_config["payload"])
 
             if callback:
-                callback(f"Request {request_index}/{total_requests} thanh cong: {result['formatted']}")
+                callback(f"✅ Request {request_index}/{total_requests} thành công: {result['formatted']}")
 
             return result
         except Exception as error:
             return {
                 "success": False,
                 "error": f"Request {request_index}/{total_requests} exception: {str(error)}",
+                "status_code": 0
             }
 
-    def fetch_bank_for_account(self, account, amount=300000, callback=None):
-        if self.proxy and not self.test_proxy():
-            return False, f"Proxy {self.proxy} khong hoat dong"
-
-        success, result = self.login(account["username"], account["password"], callback)
-        if not success:
-            return False, result
-
-        session = result
-        all_results = []
-        total_requests = len(REQUEST_SEQUENCE)
-
-        for index, request_config in enumerate(REQUEST_SEQUENCE, start=1):
-            bank_info = self.send_deposit_request(session, request_config, index, total_requests, callback=callback)
-            if not bank_info.get("success"):
-                return False, bank_info.get("error", "Khong lay duoc bank")
-
-            all_results.append(bank_info)
-
-            if index < total_requests:
+    def fetch_bank_for_account(self, account, amount=300000, callback=None, max_retries=3):
+        """
+        Lấy thông tin bank cho 1 account
+        Sẽ lặp lại toàn bộ chuỗi request đến khi thành công hoặc hết số lần retry
+        Mỗi lần retry sẽ dùng proxy mới (được xử lý ở bên ngoài)
+        """
+        if callback:
+            callback(f"🎯 Bắt đầu lấy bank cho {account.get('username')}, tối đa {max_retries} lần thử")
+        
+        for attempt in range(1, max_retries + 1):
+            if callback:
+                callback(f"🔄 Lần thử {attempt}/{max_retries} cho {account.get('username')}")
+            
+            # Kiểm tra proxy
+            if self.proxy:
+                if not self.test_proxy():
+                    error_msg = f"Proxy {self.proxy} không hoạt động"
+                    if callback:
+                        callback(f"❌ {error_msg}")
+                    if attempt < max_retries:
+                        continue
+                    return False, error_msg
+            
+            # Đăng nhập
+            success, result = self.login(account["username"], account["password"], callback)
+            if not success:
                 if callback:
-                    callback(f"Cho {REQUEST_DELAY_SECONDS} giay truoc request tiep theo...")
-                time.sleep(REQUEST_DELAY_SECONDS)
+                    callback(f"❌ Đăng nhập thất bại lần {attempt}: {result}")
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+                return False, f"Đăng nhập thất bại sau {max_retries} lần: {result}"
+            
+            session = result
+            all_results = []
+            total_requests = len(REQUEST_SEQUENCE)
+            request_success = True
+            
+            # Thực hiện chuỗi request
+            for index, request_config in enumerate(REQUEST_SEQUENCE, start=1):
+                bank_info = self.send_deposit_request(session, request_config, index, total_requests, callback=callback)
+                
+                # Nếu request thất bại
+                if not bank_info.get("success"):
+                    status_code = bank_info.get("status_code", 0)
+                    error_msg = bank_info.get("error", "Unknown error")
+                    
+                    if callback:
+                        callback(f"❌ Request thất bại: {error_msg}")
+                    
+                    # Nếu status code là 401 (unauthorized) hoặc 403, cần đăng nhập lại
+                    if status_code in [401, 403]:
+                        if callback:
+                            callback(f"⚠️ Session hết hạn, sẽ thử lại lần {attempt + 1}")
+                        request_success = False
+                        break
+                    
+                    # Các lỗi khác
+                    if attempt < max_retries:
+                        request_success = False
+                        break
+                    else:
+                        return False, error_msg
+                
+                all_results.append(bank_info)
+                
+                # Delay giữa các request
+                if index < total_requests:
+                    if callback:
+                        callback(f"⏳ Chờ {REQUEST_DELAY_SECONDS}s trước request tiếp theo...")
+                    time.sleep(REQUEST_DELAY_SECONDS)
+            
+            # Nếu hoàn thành tất cả request thành công
+            if request_success and all_results:
+                final_result = dict(all_results[-1])
+                final_result["results"] = all_results
+                
+                if callback:
+                    callback(f"✅ Hoàn thành lấy bank cho {account.get('username')}")
+                
+                return True, final_result
+            
+            # Nếu thất bại và còn lần thử
+            if attempt < max_retries:
+                if callback:
+                    callback(f"⏳ Chờ 3s trước khi thử lại lần {attempt + 1}...")
+                time.sleep(3)
+        
+        return False, f"Không thể lấy bank sau {max_retries} lần thử"
 
-        final_result = dict(all_results[-1])
-        final_result["results"] = all_results
-        return True, final_result
+    def fetch_bank_with_retry_and_new_proxy(self, account, amount=300000, callback=None, 
+                                            max_retries=3, proxy_manager=None):
+        """
+        Lấy bank với cơ chế tự động lấy proxy mới mỗi lần retry
+        """
+        if not proxy_manager:
+            # Nếu không có proxy_manager, dùng proxy hiện tại
+            return self.fetch_bank_for_account(account, amount, callback, max_retries)
+        
+        for attempt in range(1, max_retries + 1):
+            if callback:
+                callback(f"🔄 Lấy bank cho {account.get('username')} - Lần {attempt}/{max_retries}")
+            
+            # Lấy proxy mới cho mỗi lần thử
+            if attempt > 1 or not self.proxy:
+                new_proxy = proxy_manager.refresh_proxy()
+                if new_proxy:
+                    self.proxy = new_proxy
+                    if callback:
+                        callback(f"🌐 Đã đổi proxy mới: {self.proxy}")
+                else:
+                    if callback:
+                        callback(f"⚠️ Không thể lấy proxy mới, dùng proxy cũ nếu có")
+            
+            # Thử lấy bank
+            success, result = self.fetch_bank_for_account(account, amount, callback, max_retries=1)
+            
+            if success:
+                return True, result
+            
+            # Nếu thất bại và còn lần thử, đánh dấu proxy lỗi
+            if attempt < max_retries and self.proxy:
+                proxy_manager.mark_proxy_failed(self.proxy)
+                if callback:
+                    callback(f"🗑️ Đã đánh dấu proxy {self.proxy} là lỗi")
+                time.sleep(2)
+        
+        return False, f"Thất bại sau {max_retries} lần thử với proxy khác nhau"
